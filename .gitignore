@@ -11,3 +11,21 @@ tokens/
 package-lock.json
 yarn.lock
 .env
+
+# Test scripts (never commit)
+live-test.js
+test-full.js
+test.js
+test-*.js
+find-modules.js
+check-*.js
+debug.js
+
+# Logs and runtime files
+*.log
+.nyc_output/
+coverage/
+
+# Local env
+.env.local
+.env.*.local
