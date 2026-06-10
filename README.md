@@ -2,10 +2,10 @@
   <img src="https://github.com/orkestral/venom/raw/main/img/venom.png" alt="Venom" width="220" />
 </p>
 
-<h1 align="center">Venom</h1>
+<h1 align="center">Venom v6</h1>
 
 <p align="center">
-  <em>The next generation of WhatsApp automation.</em>
+  <em>The next generation of WhatsApp automation. Completely rebuilt.</em>
 </p>
 
 <p align="center">
@@ -34,18 +34,31 @@ Venom is not just another library. It's a **complete automation platform** desig
 Built on top of proven technologies, Venom gives you full control over WhatsApp Web through a clean, intuitive API — whether you're building a simple chatbot or a large-scale enterprise solution.
 
 ```
-⚡  Blazing fast message processing
-🔒  Session persistence out of the box
-🧩  Modular architecture — extend with ease
-🌐  Multi-session support for scaling
-🛡️  Battle-tested in production by thousands of developers
+  Blazing fast message processing
+  Session persistence out of the box
+  Modular architecture — extend with ease
+  Multi-session support for scaling
+  Battle-tested in production by thousands of developers
+```
+
+### What's new in v6
+
+```
+  Rewritten from scratch — cleaner, simpler codebase
+  Pure Puppeteer — no puppeteer-extra, no stealth plugins
+  Updated WhatsApp Web modules (WAWebSocketModel, WAWebConnModel, etc.)
+  Chromium auto-download on npm install
+  Node.js 18+ required
+  TypeScript 5.7+ with strict types
+  Pino logger — fast, structured logging
+  Only 6 source files — down from 83+
 ```
 
 ---
 
 ## Install
 
-One command. That's all you need.
+> Requires **Node.js 18+**. Chromium is downloaded automatically on install.
 
 ```bash
 npm install venom-bot

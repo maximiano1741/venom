@@ -1,815 +1,448 @@
-import * as ChromeLauncher from 'chrome-launcher';
-import chromeVersion from 'chrome-version';
-import * as fs from 'fs';
+import puppeteer, { Browser, Page, LaunchOptions } from 'puppeteer';
 import * as path from 'path';
-import {
-  Browser,
-  BrowserContext,
-  Page,
-  LaunchOptions,
-  PuppeteerLaunchOptions
-} from 'puppeteer';
-import puppeteer from 'puppeteer-extra';
-import { options } from '../config';
-import { CreateConfig } from '../config/create-config';
-import { puppeteerConfig } from '../config/puppeteer.config';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { useragentOverride } from '../config/WAuserAgente';
-import { sleep } from '../utils/sleep';
-import * as Spinnies from 'spinnies';
-import * as os from 'os';
-import axios from 'axios';
-import { defaultOptions } from '../config/create-config';
-import * as unzipper from 'unzipper';
-import { exec } from 'child_process';
+import * as fs from 'fs';
+import { VenomConfig } from '../config';
+import { Logger } from '../utils/logger';
 
-type CustomLaunchOptions = LaunchOptions & {
-  headless?: boolean | 'new' | 'old';
-  mkdirFolderToken?: options['mkdirFolderToken'];
-  folderNameToken?: options['folderNameToken'];
-  session?: options['session'];
-  puppeteerOptions?: options['puppeteerOptions'];
-  addBrowserArgs?: options['addBrowserArgs'];
-  browserPathExecutable?: options['browserPathExecutable'];
-  devtools?: options['devtools'];
-  browserArgs?: options['browserArgs'];
-  addProxy?: options['addProxy'];
-  browserWS?: options['browserWS'];
-};
+const WHATSAPP_WEB_URL = 'https://web.whatsapp.com/';
 
-const cach_url =
-  'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/';
+/**
+ * Default Chrome arguments for optimal performance
+ */
+const DEFAULT_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-accelerated-2d-canvas',
+  '--no-first-run',
+  '--no-zygote',
+  '--disable-gpu',
+  '--disable-blink-features=AutomationControlled',
+];
 
-function isRoot() {
-  return process.getuid && process.getuid() === 0;
-}
+/**
+ * Default User-Agent to appear as a normal browser
+ */
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-export async function initWhatsapp(
-  options: options | CreateConfig,
-  browser: Browser
-): Promise<Page | false> {
-  const waPage = await getWhatsappPage(browser);
-  if (!waPage) {
-    return false;
+/**
+ * Get Chromium executable path
+ */
+function getChromiumPath(config: VenomConfig): string | undefined {
+  // 1. User specified path
+  if (config.browserPathExecutable) {
+    return config.browserPathExecutable;
   }
+
+  // 2. Puppeteer's bundled browser
   try {
-    await waPage.setUserAgent(useragentOverride);
-    await waPage.setBypassCSP(true);
-    waPage.setDefaultTimeout(60000);
+    const pPath = puppeteer.executablePath();
+    if (fs.existsSync(pPath)) return pPath;
+  } catch {}
 
-    const { userPass, userProxy, addProxy } = options;
-
-    if (typeof options.webVersion === 'string' && options.webVersion.length) {
-      await waPage.setRequestInterception(true);
-      waPage.on('request', async (req) => {
-        if (req.url() === 'https://web.whatsapp.com/') {
-          let url = cach_url + options.webVersion + '.html';
-
-          await req.respond({
-            status: 200,
-            contentType: 'text/html',
-            body: await (await fetch(url)).text()
-          });
-        } else {
-          if (options.forceWebpack === true) {
-            const headers = req.headers();
-            if (headers.cookie) {
-              // Filter out the 'wa_build' cookies and reconstruct the cookie header
-              headers.cookie = headers.cookie
-                .split(';')
-                .filter((cookie) => !cookie.trim().startsWith('wa_build'))
-                .join(';');
-            }
-
-            // Continue the request with potentially modified headers
-            await req.continue({ headers });
-          } else {
-            await req.continue();
-          }
-        }
-      });
-    }
-    if (
-      typeof userPass === 'string' &&
-      userPass.length &&
-      typeof userProxy === 'string' &&
-      userProxy.length &&
-      Array.isArray(addProxy) &&
-      addProxy.length
-    ) {
-      await waPage.authenticate({
-        username: userProxy,
-        password: userPass
-      });
-    }
-
-    await waPage.goto(puppeteerConfig.whatsappUrl, {
-      waitUntil: 'domcontentloaded'
-    });
-
-    waPage.on('pageerror', ({ message }) => {
-      const erroLogType1 = message.includes('RegisterEffect is not a function');
-      const erroLogType2 = message.includes('[Report Only]');
-      if (erroLogType1 || erroLogType2) {
-        waPage.evaluate(() => {
-          localStorage.clear();
-          window.location.reload();
-        });
-      }
-    });
-
-    await browser.userAgent();
-    return waPage;
-  } catch (error) {
-    console.error(error);
-    await waPage.close();
-    return false;
-  }
-}
-
-export async function getWhatsappPage(
-  browser: Browser | BrowserContext
-): Promise<Page | false> {
-  try {
-    const pages: Page[] = await browser.pages();
-    return pages.length !== 0 ? pages[0] : await browser.newPage();
-  } catch {
-    return false;
-  }
-}
-
-export function folderSession(
-  options: options | CreateConfig | CustomLaunchOptions
-) {
-  try {
-    if (!options) {
-      throw new Error(`Missing required options`);
-    }
-    if (!options.folderNameToken) {
-      options.folderNameToken = defaultOptions.folderNameToken;
-    }
-
-    if (!options.session) {
-      options.session = defaultOptions.session;
-    }
-
-    const folderSession = options.mkdirFolderToken
-      ? path.join(
-          path.resolve(
-            process.cwd(),
-            options.mkdirFolderToken,
-            options.folderNameToken,
-            options.session
-          )
-        )
-      : path.join(
-          path.resolve(process.cwd(), options.folderNameToken, options.session)
+  // 3. Our downloaded Chromium
+  const localChrome = path.join(__dirname, '..', '..', '.chromium');
+  if (fs.existsSync(localChrome)) {
+    const dirs = fs.readdirSync(localChrome);
+    for (const dir of dirs) {
+      const chromePath = path.join(localChrome, dir);
+      if (fs.existsSync(chromePath)) {
+        // Find the actual executable
+        const subDirs = fs.readdirSync(chromePath, { recursive: true }) as string[];
+        const exe = subDirs.find((f: string) =>
+          f.includes('chrome') && (f.endsWith('.exe') || !path.extname(f)) && !f.includes('.pak')
         );
-
-    if (!fs.existsSync(folderSession)) {
-      fs.mkdirSync(folderSession, { recursive: true });
-    }
-
-    const folderMulidevice = options.mkdirFolderToken
-      ? path.join(
-          path.resolve(
-            process.cwd(),
-            options.mkdirFolderToken,
-            options.folderNameToken
-          )
-        )
-      : path.join(path.resolve(process.cwd(), options.folderNameToken));
-
-    if (!fs.existsSync(folderMulidevice)) {
-      fs.mkdirSync(folderMulidevice, { recursive: true });
-    }
-
-    fs.chmodSync(folderMulidevice, '777');
-    fs.chmodSync(folderSession, '777');
-
-    options.puppeteerOptions = {
-      userDataDir: folderSession,
-      ignoreHTTPSErrors: true
-    } as LaunchOptions;
-
-    puppeteerConfig.chromiumArgs.push(`--user-data-dir=${folderSession}`);
-    return true;
-  } catch (error) {
-    console.error(error);
-    return false;
-  }
-}
-
-async function getGlobalChromeVersion(): Promise<string | null> {
-  try {
-    const chromePath = ChromeLauncher.Launcher.getInstallations().pop();
-    if (chromePath) {
-      const version = await chromeVersion(chromePath);
-      return version;
-    }
-  } catch (e) {
-    console.error('Error retrieving Chrome version:', e);
-  }
-  return null;
-}
-
-async function checkPathDowload(extractPath: string) {
-  try {
-    const pathChrome = path.join(extractPath, 'chrome-win', 'chrome.exe');
-    if (!fs.existsSync(pathChrome)) {
-      return false;
-    }
-    return pathChrome;
-  } catch {
-    return false;
-  }
-}
-
-async function getChromeVersionBash(executablePath: string): Promise<string> {
-  const notCheckText = 'Not check version';
-
-  try {
-    const platform = os.platform();
-    let command = '';
-
-    if (platform === 'linux') {
-      if (executablePath.includes('chromium')) {
-        command = 'chromium-browser --version';
-      } else if (executablePath.includes('chrome')) {
-        command = 'google-chrome --version';
-      }
-    } else if (platform === 'darwin' && executablePath.includes('Chrome')) {
-      command =
-        '/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --version';
-    }
-
-    if (!command) {
-      return notCheckText;
-    }
-
-    const { stdout, stderr } = await execAsync(command);
-    if (stderr) {
-      return notCheckText;
-    }
-
-    const version = stdout.trim().split(' ')[2];
-    return version;
-  } catch (error) {
-    return notCheckText;
-  }
-}
-
-function execAsync(
-  command: string
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    exec(command, (error, stdout, stderr) => {
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-function downloadBash(): Promise<string | false> {
-  return new Promise((resolve, reject) => {
-    try {
-      const platform = os.platform();
-      if (platform === 'linux') {
-        exec(
-          'curl -O https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb',
-          (error, stdout, stderr) => {
-            if (error) {
-              throw new Error(
-                `Error downloading Google Chrome: ${error.message}`
-              );
-            }
-            exec(
-              'sudo dpkg -i google-chrome-stable_current_amd64.deb',
-              (error, stdout, stderr) => {
-                if (error) {
-                  throw new Error(
-                    `Error installing Google Chrome: ${error.message}`
-                  );
-                }
-                exec('sudo apt-get update', (error, stdout, stderr) => {
-                  if (error) {
-                    throw new Error(
-                      `Error update dependencies: ${error.message}`
-                    );
-                  }
-
-                  exec('sudo apt-get install -f', (error, stdout, stderr) => {
-                    if (error) {
-                      throw new Error(
-                        `Error fixing dependencies: ${error.message}`
-                      );
-                    }
-
-                    exec('which google-chrome', (error, stdout, stderr) => {
-                      if (error) {
-                        throw new Error(
-                          `Error getting Google Chrome path: ${error.message}`
-                        );
-                      }
-                      const path = stdout.trim();
-                      console.log(
-                        `Google Chrome installed successfully at: ${path}`
-                      );
-                      return resolve(path);
-                    });
-                  });
-                });
-              }
-            );
-          }
-        );
-      } else if (platform === 'darwin') {
-        exec(
-          'curl -O https://dl.google.com/chrome/mac/stable/GGRO/googlechrome.dmg',
-          (error, stdout, stderr) => {
-            if (error) {
-              throw new Error(
-                `Error downloading Google Chrome: ${error.message}`
-              );
-            }
-
-            exec('hdiutil attach googlechrome.dmg', (error, stdout, stderr) => {
-              if (error) {
-                throw new Error(`Error mounting DMG file: ${error.message}`);
-              }
-
-              exec(
-                'rsync -a "/Volumes/Google Chrome/Google Chrome.app" "/Applications/"',
-                (error, stdout, stderr) => {
-                  if (error) {
-                    throw new Error(
-                      `Error installing Google Chrome: ${error.message}`
-                    );
-                  }
-
-                  exec(
-                    'hdiutil detach "/Volumes/Google Chrome"',
-                    (error, stdout, stderr) => {
-                      if (error) {
-                        throw new Error(
-                          `Error unmounting DMG file: ${error.message}`
-                        );
-                      }
-
-                      exec(
-                        'ls -d "/Applications/Google Chrome.app"',
-                        (error, stdout, stderr) => {
-                          if (error) {
-                            console.error(
-                              `Error getting Google Chrome path: ${error.message}`
-                            );
-                            return;
-                          }
-
-                          const path = stdout.trim();
-                          console.log(
-                            `Google Chrome installed successfully at: ${path}`
-                          );
-                          return resolve(path);
-                        }
-                      );
-                    }
-                  );
-                }
-              );
-            });
-          }
-        );
-      }
-      resolve(false);
-    } catch (error) {
-      console.error(error);
-      return reject(false);
-    }
-  });
-}
-
-export async function initBrowser(
-  options: CustomLaunchOptions,
-  spinnies: any
-): Promise<Browser | false> {
-  try {
-    // Use stealth plugin to avoid being detected as a bot
-    puppeteer.use(StealthPlugin());
-
-    const checkFolder = folderSession(options);
-    if (!checkFolder) {
-      throw new Error(`Error executing client session info`);
-    }
-
-    // Check for deprecated headless option
-    if (options.headless === true) {
-      console.warn(
-        'Warning: The usage of "headless: true" is deprecated. Please use "headless: \'new\'" or "headless: false" instead. https://developer.chrome.com/articles/new-headless/'
-      );
-    }
-
-    if (
-      options.headless !== 'new' &&
-      options.headless !== 'old' &&
-      options.headless !== false &&
-      options.headless !== true
-    ) {
-      throw new Error('Now use only headless: "new", "true" or false');
-    }
-
-    const chromePath = getChromeExecutablePath();
-    // Set the executable path to the path of the Chrome binary or the executable path provided
-    let executablePath =
-      options.browserPathExecutable ??
-      getChrome() ??
-      puppeteer.executablePath() ??
-      chromePath;
-
-    spinnies.add(`executable-path-${options.session}`, {
-      text: `...`
-    });
-
-    spinnies.succeed(`executable-path-${options.session}`, {
-      text: `Executable path browser: ${executablePath}`
-    });
-
-    const extractPath = path.join(process.cwd(), 'chrome');
-    const checkPath = await checkPathDowload(extractPath);
-    const platform = os.platform();
-
-    if (!executablePath || !isChromeInstalled(executablePath)) {
-      spinnies.add(`browser-info-${options.session}`, {
-        text: `...`
-      });
-      spinnies.fail(`browser-info-${options.session}`, {
-        text: `Could not find the google-chrome browser on the machine!`
-      });
-      const resultBash = await downloadBash();
-      if (resultBash) {
-        executablePath = resultBash;
-      } else if (!checkPath) {
-        spinnies.add(`browser-status-${options.session}`, {
-          text: `Downloading browser...`
-        });
-
-        // Download the latest version of Chrome
-        const downloadUrl = `https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Win_x64%2F1000027%2Fchrome-win.zip?generation=1651780728332948&alt=media`;
-        const zipFilePath = path.join(
-          process.cwd(),
-          'chrome',
-          'chrome-win.zip'
-        );
-
-        if (!fs.existsSync(extractPath)) {
-          fs.mkdirSync(extractPath, { recursive: true });
-        }
-
-        fs.chmodSync(extractPath, '777');
-
-        spinnies.add(`browser-path-${options.session}`, {
-          text: `...`
-        });
-        spinnies.succeed(`browser-path-${options.session}`, {
-          text: `Path download Chrome: ${zipFilePath}`
-        });
-
-        const response = await axios.get(downloadUrl, {
-          responseType: 'arraybuffer'
-        });
-
-        // Verifica se o status da resposta é 200 (OK)
-        if (response.status === 200) {
-          await fs.promises.writeFile(zipFilePath, response.data);
-          spinnies.succeed(`browser-status-${options.session}`, {
-            text: `Download completed.`
-          });
-
-          spinnies.add(`browser-status-${options.session}`, {
-            text: `Extracting Chrome: ${extractPath}`
-          });
-
-          const zip = await unzipper.Open.file(zipFilePath);
-          await zip.extract({ path: extractPath });
-          spinnies.succeed(`browser-status-${options.session}`, {
-            text: `Chrome extracted successfully.`
-          });
-          const pathChrome = path.join(extractPath, 'chrome-win', 'chrome.exe');
-          if (!fs.existsSync(pathChrome)) {
-            throw new Error(`Error no Path download Chrome`);
-          }
-          const checkDowl = await checkPathDowload(extractPath);
-          if (!checkDowl) {
-            throw new Error(`Error no Path download Chrome`);
-          }
-
-          const folderChrom = path.join(extractPath, 'chrome-win');
-          fs.chmodSync(folderChrom, '777');
-
-          executablePath = pathChrome;
-          spinnies.add(`browser-path-${options.session}`, {
-            text: `...`
-          });
-          spinnies.succeed(`browser-path-${options.session}`, {
-            text: `Execute Path Chrome: ${executablePath}`
-          });
-        } else {
-          throw new Error('Error download file Chrome.');
-        }
-      } else {
-        executablePath = checkPath;
+        if (exe) return path.join(chromePath, exe as string);
       }
     }
-
-    let chromeVersion = '';
-    let versionTimeout: string | number | NodeJS.Timeout;
-
-    spinnies.add(`browser-Platform-${options.session}`, {
-      text: `...`
-    });
-
-    spinnies.succeed(`browser-Platform-${options.session}`, {
-      text: `Platform: ${platform}`
-    });
-
-    if (platform === 'darwin' || platform === 'linux') {
-      chromeVersion = await getChromeVersionBash(executablePath);
-    } else {
-      if (executablePath.includes('google-chrome')) {
-        chromeVersion = await getGlobalChromeVersion();
-      } else {
-        const browser = await puppeteer.launch({
-          executablePath,
-          headless:
-            options.headless === true || options.headless === false
-              ? options.headless
-              : 'new',
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
-        versionTimeout = setTimeout(() => {
-          browser.close();
-          throw new Error('This browser version has problems');
-        }, 10000);
-        chromeVersion = await browser.version();
-        clearTimeout(versionTimeout);
-        await browser.close();
-      }
-    }
-
-    if (chromeVersion) {
-      spinnies.add(`browser-Version-${options.session}`, {
-        text: `...`
-      });
-
-      spinnies.succeed(`browser-Version-${options.session}`, {
-        text: `Browser Version: ${chromeVersion}`
-      });
-    }
-
-    const extras = { executablePath };
-
-    if (Array.isArray(options.addProxy) && options.addProxy.length) {
-      const proxy =
-        options.addProxy[Math.floor(Math.random() * options.addProxy.length)];
-      const args = options.browserArgs ?? puppeteerConfig.chromiumArgs;
-      args.push(`--proxy-server=${proxy}`);
-    }
-
-    if (
-      Array.isArray(options.addBrowserArgs) &&
-      options.addBrowserArgs.length
-    ) {
-      options.addBrowserArgs.forEach((arg) => {
-        if (!puppeteerConfig.chromiumArgs.includes(arg)) {
-          puppeteerConfig.chromiumArgs.push(arg);
-        }
-      });
-    }
-
-    if (options.headless === 'old') {
-      puppeteerConfig.chromiumArgs.push(`--headless=old`);
-    }
-
-    const launchOptions = {
-      headless: options.headless as 'new' | boolean,
-      devtools: options.devtools,
-      args: options.browserArgs ?? puppeteerConfig.chromiumArgs,
-      ...options.puppeteerOptions,
-      ...extras
-    };
-
-    const isRunningAsRoot = isRoot();
-    if (isRunningAsRoot && options.browserArgs && options.browserArgs.length) {
-      addArgsRoot(options.browserArgs);
-    }
-
-    if (options.browserWS && options.browserWS !== '') {
-      return await puppeteer.connect({ browserWSEndpoint: options.browserWS });
-    } else {
-      await removeStoredSingletonLock(
-        options.puppeteerOptions,
-        spinnies,
-        options
-      );
-      return await puppeteer.launch(launchOptions);
-    }
-  } catch (e) {
-    console.error(e);
-    return false;
   }
-}
 
-function addArgsRoot(args: string[]) {
-  if (Array.isArray(args)) {
-    args.forEach((option) => {
-      if (!puppeteerConfig.argsRoot.includes(option)) {
-        puppeteerConfig.argsRoot.push(option);
-      }
-    });
-  }
-}
-
-function getChromeExecutablePath() {
-  const platform = os.platform();
-  switch (platform) {
-    case 'win32':
-      return getWindowsChromeExecutablePath();
-    case 'darwin':
-      return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    case 'linux':
-      return '/usr/bin/google-chrome';
-    default:
-      console.error('Could not find browser.');
-      return null;
-  }
-}
-
-function getWindowsChromeExecutablePath() {
-  const programFilesPath = process.env.ProgramFiles || '';
-  const programFilesx86Path = process.env['ProgramFiles(x86)'] || '';
-
-  if (programFilesx86Path) {
-    return path.join(
-      programFilesx86Path,
-      'Google',
-      'Chrome',
-      'Application',
-      'chrome.exe'
-    );
-  } else if (programFilesPath) {
-    return path.join(
-      programFilesPath,
-      'Google',
-      'Chrome',
-      'Application',
-      'chrome.exe'
-    );
-  } else {
-    return null;
-  }
-}
-
-export async function statusLog(
-  page: Page,
-  spinnies: Spinnies,
-  session: string,
-  callback: (infoLog: string) => void
-) {
-  while (true) {
-    if (page.isClosed()) {
-      try {
-        spinnies.fail(`whatzapp-intro-${session}`, {
-          text: 'Erro intro'
-        });
-      } catch {}
-      break;
-    }
-
-    const infoLog: string = await page
-      .evaluate(() => {
-        const target = document.getElementsByClassName('_2dfCc');
-        if (target && target.length) {
-          if (
-            target[0]['innerText'] !== 'WhatsApp' &&
-            target[0]['innerText'] !== window['statusInicial']
-          ) {
-            window['statusInicial'] = target[0]['innerText'];
-            return window['statusInicial'];
-          }
-        }
-      })
-      .catch(() => {});
-    if (infoLog) {
-      callback(infoLog);
-    }
-    await sleep(200);
-  }
+  // Let Puppeteer figure it out
+  return undefined;
 }
 
 /**
- * Retrieves chrome instance path
+ * Launch browser instance
  */
-function getChrome() {
-  try {
-    const chromeInstalations = ChromeLauncher.Launcher.getInstallations();
-    return chromeInstalations[0];
-  } catch (error) {
-    return undefined;
+export async function launchBrowser(config: VenomConfig): Promise<Browser> {
+  const log = Logger.get(config.session);
+
+  const args = [
+    ...DEFAULT_ARGS,
+    ...(config.browserArgs || []),
+  ];
+
+  if (config.addProxy?.length) {
+    args.push(`--proxy-server=${config.addProxy[0]}`);
   }
+
+  const launchOptions: LaunchOptions = {
+    headless: config.headless === 'new' ? true : (config.headless ?? true),
+    args,
+    executablePath: getChromiumPath(config),
+    userDataDir: path.join(
+      config.tokenDir || path.join(process.cwd(), 'tokens'),
+      config.session
+    ),
+    ...(config.browserWS ? { browserWSEndpoint: config.browserWS } : {}),
+    ...(config.puppeteerOptions || {}),
+  };
+
+  log.info('Launching browser...');
+
+  const browser = await puppeteer.launch(launchOptions);
+
+  log.info('Browser launched successfully');
+
+  return browser;
 }
 
-function isChromeInstalled(executablePath: string): boolean {
-  try {
-    fs.accessSync(executablePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+/**
+ * Initialize WhatsApp Web page
+ */
+export async function initPage(browser: Browser, config: VenomConfig): Promise<Page> {
+  const log = Logger.get(config.session);
 
-function removeStoredSingletonLock(
-  puppeteerOptions: PuppeteerLaunchOptions,
-  spinnies: any,
-  options: options | CreateConfig
-): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    try {
-      const platform = os.platform();
-      const { userDataDir } = puppeteerOptions;
-      const singletonLockPath = path.join(
-        path.resolve(process.cwd(), userDataDir, 'SingletonLock')
-      );
+  const page = (await browser.pages())[0] || await browser.newPage();
 
-      if (platform === 'win32') {
-        // No need to remove the lock on Windows, so resolve with true directly.
-        resolve(true);
+  // Set user agent
+  await page.setUserAgent(config.userAgent || DEFAULT_USER_AGENT);
+
+  // Bypass CSP
+  await page.setBypassCSP(true);
+
+  // Set default timeout
+  page.setDefaultTimeout(60000);
+
+  // Block unnecessary resources for performance
+  if (config.headless) {
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (['font', 'media', 'image'].includes(resourceType)) {
+        req.abort();
       } else {
-        spinnies.add(`stored-singleton-lock-${options.session}`, {
-          text: `...`
-        });
-
-        spinnies.succeed(`stored-singleton-lock-${options.session}`, {
-          text: `Path Stored "SingletonLock": ${singletonLockPath}`
-        });
-
-        spinnies.add(`path-stored-singleton-lock-${options.session}`, {
-          text: `checking SingletonLock file`
-        });
-
-        if (fs.existsSync(singletonLockPath)) {
-          spinnies.add(`path-stored-singleton-lock-${options.session}`, {
-            text: `The file was found "SingletonLock"`
-          });
-
-          fs.unlink(singletonLockPath, (error) => {
-            if (error && error.code !== 'ENOENT') {
-              spinnies.fail(`path-stored-singleton-lock-${options.session}`, {
-                text: `Error removing "SingletonLock": ${error}`
-              });
-              reject(false);
-            } else {
-              spinnies.succeed(
-                `path-stored-singleton-lock-${options.session}`,
-                {
-                  text: `Removing SingletonLock path: ${singletonLockPath}`
-                }
-              );
-              spinnies.add(
-                `path-stored-singleton-lock-write-file-${options.session}`,
-                {
-                  text: `re-adding the file "SingletonLock": ${singletonLockPath}`
-                }
-              );
-              fs.writeFile(singletonLockPath, '', (error) => {
-                if (error && error.code !== 'ENOENT') {
-                  spinnies.fail(
-                    `path-stored-singleton-lock-write-file-${options.session}`,
-                    {
-                      text: `could not add the file "SingletonLock": ${singletonLockPath}`
-                    }
-                  );
-                  reject(false);
-                } else {
-                  spinnies.succeed(
-                    `path-stored-singleton-lock-write-file-${options.session}`,
-                    {
-                      text: `file created successfully "SingletonLock": ${singletonLockPath}`
-                    }
-                  );
-                  resolve(true);
-                }
-              });
-            }
-          });
-        } else {
-          spinnies.succeed(`path-stored-singleton-lock-${options.session}`, {
-            text: `The file "SingletonLock" was not found`
-          });
-          resolve(true);
-        }
+        req.continue();
       }
+    });
+  }
+
+  // Intercept specific WhatsApp Web version
+  if (config.webVersion) {
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (req.url() === WHATSAPP_WEB_URL) {
+        const cacheUrl = `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${config.webVersion}.html`;
+        req.respond({
+          status: 200,
+          contentType: 'text/html',
+          body: '', // Will fetch
+        });
+      } else {
+        req.continue();
+      }
+    });
+  }
+
+  log.info('Navigating to WhatsApp Web...');
+
+  await page.goto(WHATSAPP_WEB_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 0,
+  });
+
+  log.info('WhatsApp Web loaded');
+
+  return page;
+}
+
+/**
+ * Wait for WhatsApp Web to be ready (window.Debug.VERSION exists)
+ */
+export async function waitForReady(page: Page, timeout = 30000): Promise<boolean> {
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const ready = await page.evaluate(() => {
+      return typeof (window as any).Debug?.VERSION !== 'undefined';
+    }).catch(() => false);
+
+    if (ready) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  return false;
+}
+
+/**
+ * Get WhatsApp connection state
+ */
+export async function getConnectionState(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    try {
+      const Socket = (window as any).require?.('WAWebSocketModel')?.Socket;
+      return Socket?.state || 'UNKNOWN';
     } catch {
-      resolve(true);
+      return 'UNKNOWN';
     }
+  }).catch(() => 'UNKNOWN');
+}
+
+/**
+ * Check if needs authentication (QR scan)
+ */
+export async function needsAuth(page: Page): Promise<boolean> {
+  const state = await getConnectionState(page);
+  return state === 'UNPAIRED' || state === 'UNPAIRED_IDLE';
+}
+
+/**
+ * Get QR code data for authentication
+ */
+export async function getQRCode(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    try {
+      const Conn = (window as any).require?.('WAWebConnModel')?.Conn;
+      const SignalStore = (window as any).require?.('WAWebSignalStoreApi')?.waSignalStore;
+      const NoiseInfo = (window as any).require?.('WAWebUserPrefsInfoStore')?.waNoiseInfo;
+      const Base64 = (window as any).require?.('WABase64');
+      const MultiDevice = (window as any).require?.('WAWebUserPrefsMultiDevice');
+
+      if (!Conn?.ref || !SignalStore || !NoiseInfo || !Base64 || !MultiDevice) {
+        return null;
+      }
+
+      const registrationInfo = SignalStore.getRegistrationInfo();
+      const noiseKeyPair = NoiseInfo.get();
+      const staticKeyB64 = Base64.encodeB64(noiseKeyPair.staticKeyPair.pubKey);
+      const identityKeyB64 = Base64.encodeB64(registrationInfo.identityKeyPair.pubKey);
+      const advSecret = MultiDevice.getADVSecretKey();
+
+      return `${Conn.ref},${staticKeyB64},${identityKeyB64},${advSecret}`;
+    } catch {
+      return null;
+    }
+  }).catch(() => null);
+}
+
+/**
+ * Request pairing code instead of QR
+ */
+export async function requestPairingCode(page: Page, phoneNumber: string): Promise<string> {
+  return page.evaluate(async (phone: string) => {
+    const Api = (window as any).require?.('WAWebAltDeviceLinkingApi');
+    if (!Api) throw new Error('Pairing API not available');
+
+    Api.setPairingType('ALT_DEVICE_LINKING');
+    await Api.initializeAltDeviceLinking();
+    return Api.startAltLinkingFlow(phone, true);
+  }, phoneNumber);
+}
+
+/**
+ * Inject the WWebJS utility layer into WhatsApp Web
+ * This exposes functions that Venom uses to interact with WhatsApp
+ */
+export async function injectWAPI(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    if ((window as any).WWebJS) return; // already injected
+
+    const WWebJS: any = {};
+    const W = (window as any);
+
+    // Helper to get Store modules
+    const req = (mod: string) => W.require?.(mod);
+
+    // Send message
+    WWebJS.sendTextMessage = async (chatId: string, text: string, options: any = {}) => {
+      const ChatStore = req('WAWebChatCollection');
+      const MsgStore = req('WAWebMsgCollection');
+      const SendMsg = req('WAWebSendMsgChatAction');
+
+      const chat = await ChatStore.find(chatId);
+      if (!chat) throw new Error(`Chat not found: ${chatId}`);
+
+      const msgData = {
+        type: 'chat',
+        body: text,
+        quotedMsg: options.quotedMsgId ? MsgStore.get(options.quotedMsgId) : undefined,
+        mentionedJidList: options.mentions || [],
+      };
+
+      return SendMsg.sendTextMsgToChat(chat, msgData);
+    };
+
+    // Send media
+    WWebJS.sendMediaMessage = async (chatId: string, mediaData: any) => {
+      const ChatStore = req('WAWebChatCollection');
+      const SendMedia = req('WAWebSendMediaChatAction');
+
+      const chat = await ChatStore.find(chatId);
+      if (!chat) throw new Error(`Chat not found: ${chatId}`);
+
+      return SendMedia.sendMediaToChat(chat, mediaData);
+    };
+
+    // Get all chats
+    WWebJS.getAllChats = () => {
+      const ChatStore = req('WAWebChatCollection');
+      return ChatStore?.getModelsArray?.()?.map((c: any) => c.serialize?.()) || [];
+    };
+
+    // Get all contacts
+    WWebJS.getAllContacts = () => {
+      const ContactStore = req('WAWebContactCollection');
+      return ContactStore?.getModelsArray?.()?.map((c: any) => c.serialize?.()) || [];
+    };
+
+    // Get chat by ID
+    WWebJS.getChat = async (chatId: string) => {
+      const ChatStore = req('WAWebChatCollection');
+      const chat = await ChatStore?.find(chatId);
+      return chat?.serialize?.();
+    };
+
+    // Get messages in chat
+    WWebJS.getMessages = (chatId: string, count: number) => {
+      const ChatStore = req('WAWebChatCollection');
+      const chat = ChatStore?.get(chatId);
+      if (!chat) return [];
+      const msgs = chat.msgs?.getModelsArray?.()?.slice(-count) || [];
+      return msgs.map((m: any) => m.serialize?.());
+    };
+
+    // Get profile picture
+    WWebJS.getProfilePic = async (chatId: string) => {
+      const PicStore = req('WAWebProfilePicThumbCollection');
+      const pic = await PicStore?.find(chatId);
+      return pic?.eurl || null;
+    };
+
+    // Group functions
+    WWebJS.getGroupMembers = (groupId: string) => {
+      const GroupStore = req('WAWebGroupCollection');
+      const group = GroupStore?.get(groupId);
+      return group?.participants?.getModelsArray?.()?.map((p: any) => p.serialize?.()) || [];
+    };
+
+    WWebJS.getGroupAdmins = (groupId: string) => {
+      const GroupStore = req('WAWebGroupCollection');
+      const group = GroupStore?.get(groupId);
+      return group?.participants?.getModelsArray?.()
+        ?.filter((p: any) => p.isAdmin || p.isSuperAdmin)
+        ?.map((p: any) => p.id?.toString?.()) || [];
+    };
+
+    // Check number status
+    WWebJS.checkNumberStatus = async (chatId: string) => {
+      const WapQuery = req('WAWebWidToJid');
+      try {
+        const result = await WapQuery?.queryExist?.(chatId);
+        return { exists: !!result?.wid, jid: result?.wid?.toString?.() };
+      } catch {
+        return { exists: false };
+      }
+    };
+
+    // Get connection info
+    WWebJS.getConnectionInfo = () => {
+      const Conn = req('WAWebConnModel')?.Conn;
+      if (!Conn) return null;
+      return {
+        wid: Conn.wid?.toString?.(),
+        phone: Conn.phone?.toString?.(),
+        platform: Conn.platform,
+        pushname: Conn.pushname,
+      };
+    };
+
+    // Get battery level
+    WWebJS.getBatteryLevel = () => {
+      const Battery = req('WAWebBatteryState');
+      return Battery?.battery || null;
+    };
+
+    // Block/Unblock contact
+    WWebJS.blockContact = async (chatId: string) => {
+      const BlockStore = req('WAWebBlockContactAction');
+      const ContactStore = req('WAWebContactCollection');
+      const contact = ContactStore?.get(chatId);
+      if (contact) return BlockStore?.blockContact?.(contact);
+    };
+
+    WWebJS.unblockContact = async (chatId: string) => {
+      const BlockStore = req('WAWebBlockContactAction');
+      const ContactStore = req('WAWebContactCollection');
+      const contact = ContactStore?.get(chatId);
+      if (contact) return BlockStore?.unblockContact?.(contact);
+    };
+
+    // Send seen
+    WWebJS.sendSeen = async (chatId: string) => {
+      const ChatStore = req('WAWebChatCollection');
+      const SendSeen = req('WAWebSendSeenChatAction');
+      const chat = ChatStore?.get(chatId);
+      if (chat) return SendSeen?.sendSeen?.(chat);
+    };
+
+    // Typing state
+    WWebJS.setTyping = async (chatId: string, isTyping: boolean) => {
+      const ChatStore = req('WAWebChatCollection');
+      const chat = ChatStore?.get(chatId);
+      if (!chat) return;
+
+      const Cmd = req('WAWebCmd')?.Cmd;
+      if (isTyping) {
+        Cmd?.sendPresenceAvailable?.();
+      } else {
+        Cmd?.sendPresenceUnavailable?.();
+      }
+    };
+
+    // Delete message
+    WWebJS.deleteMessage = async (chatId: string, messageIds: string[], everyone: boolean) => {
+      const ChatStore = req('WAWebChatCollection');
+      const MsgStore = req('WAWebMsgCollection');
+      const chat = ChatStore?.get(chatId);
+      if (!chat) return;
+
+      const msgs = messageIds
+        .map((id) => MsgStore?.get(id))
+        .filter(Boolean);
+
+      if (everyone) {
+        const Revoke = req('WAWebRevokeMsgAction');
+        return Revoke?.revokeMessages?.(chat, msgs);
+      } else {
+        const Delete = req('WAWebDeleteMsgAction');
+        return Delete?.deleteMessages?.(chat, msgs);
+      }
+    };
+
+    // Set profile
+    WWebJS.setProfileStatus = async (status: string) => {
+      const StatusStore = req('WAWebSetStatusAction');
+      return StatusStore?.setStatus?.(status);
+    };
+
+    WWebJS.setProfileName = async (name: string) => {
+      const ProfileStore = req('WAWebSetPushnameAction');
+      return ProfileStore?.setPushname?.(name);
+    };
+
+    // Get host device info
+    WWebJS.getHostDevice = () => {
+      const Conn = req('WAWebConnModel')?.Conn;
+      if (!Conn) return null;
+      return Conn.serialize?.();
+    };
+
+    // Get WhatsApp Web version
+    WWebJS.getWAVersion = () => {
+      return (window as any).Debug?.VERSION || null;
+    };
+
+    (window as any).WWebJS = WWebJS;
   });
 }

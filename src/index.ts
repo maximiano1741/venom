@@ -1,20 +1,13 @@
-export * from './api/model';
-export {
-  AckType,
-  ChatState,
-  GroupChangeEvent,
-  GroupNotificationType,
-  MessageType,
-  SocketState,
-  InterfaceMode,
-  InterfaceState
-} from './api/model/enum';
-export { Whatsapp } from './api/whatsapp';
-export { CreateConfig } from './config/create-config';
-export { connect } from './controllers/init';
-export {
-  create,
-  CatchQR,
-  CreateOptions,
-  StatusFind
-} from './controllers/initializer';
+// ─── New Venom ─────────────────────────────────────────────
+// High-performance WhatsApp automation framework for Node.js
+// ────────────────────────────────────────────────────────────
+
+// Core
+export { VenomClient, VenomMessage, ConnectionState, AckType } from './core/client';
+export { create, CreateOptions, CatchQR, StatusFind } from './core/initializer';
+
+// Config
+export { VenomConfig, createConfig, defaultConfig } from './config';
+
+// Types
+export type { Browser, Page } from 'puppeteer';
