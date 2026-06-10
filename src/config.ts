@@ -8,6 +8,9 @@ export interface VenomConfig {
   /** Headless mode (default: true) */
   headless?: boolean | 'new';
 
+  /** Browser engine to use: 'chromium' (default), 'chrome', 'edge', 'firefox' */
+  browser?: 'chromium' | 'chrome' | 'edge' | 'firefox';
+
   /** Open DevTools */
   devtools?: boolean;
 
@@ -67,6 +70,9 @@ export interface VenomConfig {
 
   /** QR max retries */
   qrMaxRetries?: number;
+
+  /** QR timeout in ms (how long each QR is valid before refresh) */
+  qrTimeout?: number;
 
   /** Takeover on conflict */
   takeoverOnConflict?: boolean;

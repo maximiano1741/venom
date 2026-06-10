@@ -17,12 +17,6 @@ export const Logger = {
     const logger = pino({
       name: `venom:${session}`,
       level: 'info',
-      transport: {
-        target: 'pino-pretty' in {} ? undefined : undefined,
-      },
-      formatters: {
-        level: (label) => ({ level: label }),
-      },
     });
 
     loggers.set(session, logger);
